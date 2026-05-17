@@ -5,6 +5,7 @@ function DinoGame() {
   const [gameState, setGameState] = useState('menu') // menu, playing, gameover
   const [score, setScore] = useState(0)
   const [highScore, setHighScore] = useState(0)
+  const [screenShake, setScreenShake] = useState(0)
 
   // Game constants
   const GAME_WIDTH = 800
@@ -21,9 +22,11 @@ function DinoGame() {
   const gameLoopRef = useRef(null)
   const scoreRef = useRef(0)
   const gameSpeedRef = useRef(GAME_SPEED_START)
-  const dinoRef = useRef({ y: GROUND_Y, vy: 0, width: 46, height: 47, isJumping: false, frame: 0 })
+  const dinoRef = useRef({ y: GROUND_Y, vy: 0, width: 46, height: 47, isJumping: false, frame: 0, scaleX: 1, scaleY: 1 })
   const obstaclesRef = useRef([])
   const cloudsRef = useRef([])
+  const particlesRef = useRef([])
+  const parallaxLayersRef = useRef([])
   const lastSpawnRef = useRef(0)
   const frameCountRef = useRef(0)
 
@@ -43,9 +46,9 @@ function DinoGame() {
 
   const spawnObstacle = useCallback(() => {
     const types = [
-      { width: 25, height: 45, x: GAME_WIDTH + 50 }, // Small cactus
-      { width: 35, height: 60, x: GAME_WIDTH + 50 }, // Big cactus
-      { width: 70, height: 40, x: GAME_WIDTH + 50 }, // Group of cacti
+      { width: 25, height: 45, type: 'small', x: GAME_WIDTH + 50 }, // Small cactus
+      { width: 35, height: 60, type: 'big', x: GAME_WIDTH + 50 }, // Big cactus
+      { width: 70, height: 40, type: 'group', x: GAME_WIDTH + 50 }, // Group of cacti
     ]
     const type = types[Math.floor(Math.random() * types.length)]
     obstaclesRef.current.push({
@@ -61,6 +64,22 @@ function DinoGame() {
       y: 30 + Math.random() * 120,
       speed: 1 + Math.random() * 1.5,
       scale: 0.6 + Math.random() * 0.8,
+      opacity: 0.6 + Math.random() * 0.4,
+    })
+  }, [])
+
+  const spawnParticle = useCallback((x, y, type) => {
+    const colors = type === 'dust' ? ['#d4a574', '#c49a6c', '#b8956a'] : ['#f1c40f', '#f39c12', '#e67e22']
+    particlesRef.current.push({
+      x,
+      y,
+      vx: (Math.random() - 0.5) * 3,
+      vy: type === 'dust' ? -Math.random() * 2 : (Math.random() - 0.5) * 2,
+      size: 2 + Math.random() * 4,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      life: 1,
+      decay: 0.02 + Math.random() * 0.02,
+      type,
     })
   }, [])
 
@@ -68,11 +87,14 @@ function DinoGame() {
     setGameState('menu')
     scoreRef.current = 0
     gameSpeedRef.current = GAME_SPEED_START
-    dinoRef.current = { y: GROUND_Y, vy: 0, width: 46, height: 47, isJumping: false, frame: 0 }
+    dinoRef.current = { y: GROUND_Y, vy: 0, width: 46, height: 47, isJumping: false, frame: 0, scaleX: 1, scaleY: 1 }
     obstaclesRef.current = []
     cloudsRef.current = []
+    particlesRef.current = []
+    parallaxLayersRef.current = []
     lastSpawnRef.current = 0
     frameCountRef.current = 0
+    setScreenShake(0)
     setScore(0)
   }, [])
 
@@ -124,6 +146,7 @@ function DinoGame() {
     if (gameState !== 'playing') return
 
     let animationFrameId
+    let isPlaying = true
     const canvas = document.getElementById('game-canvas')
     if (!canvas) return
 
@@ -137,14 +160,33 @@ function DinoGame() {
     ctx.scale(dpr, dpr)
 
     const drawDino = (x, y, frame) => {
-      ctx.fillStyle = '#2c3e50'
+      const dino = dinoRef.current
+      const isRunning = !dino.isJumping && gameState === 'playing'
+      const legCycle = isRunning ? Math.floor(frame / 3) % 2 : 0
+      const squash = dino.isJumping ? 0.9 : 1
+      const stretch = dino.isJumping ? 1.1 : 1
 
-      // Dino body
-      const legOffset = frame % 2 === 0 ? 0 : -5
+      // Shadow (stays on ground surface)
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.25)'
+      ctx.beginPath()
+      ctx.ellipse(x + dino.width / 2, GROUND_Y + 38, 22, 6, 0, 0, Math.PI * 2)
+      ctx.fill()
 
-      // Legs
-      ctx.fillRect(x + 8, y + 35, 8, 12)
-      ctx.fillRect(x + 26, y + 35, 8, 12)
+      ctx.save()
+      ctx.translate(x + dino.width / 2, y + dino.height / 2)
+      ctx.scale(dino.scaleX * squash, dino.scaleY * stretch)
+      ctx.translate(-(x + dino.width / 2), -(y + dino.height / 2))
+
+      // Dino body gradient
+      const bodyGradient = ctx.createLinearGradient(x, y, x + dino.width, y + dino.height)
+      bodyGradient.addColorStop(0, '#34495e')
+      bodyGradient.addColorStop(1, '#2c3e50')
+      ctx.fillStyle = bodyGradient
+
+      // Legs with animation
+      const legOffset = legCycle === 0 ? 0 : -3
+      ctx.fillRect(x + 10, y + 35 + legOffset, 8, 12)
+      ctx.fillRect(x + 28, y + 35 - legOffset, 8, 12)
 
       // Body
       ctx.fillRect(x + 10, y + 18, 26, 24)
@@ -152,95 +194,221 @@ function DinoGame() {
       // Head
       ctx.fillRect(x + 15, y, 28, 18)
 
-      // Eye
+      // Eye with shine
       ctx.fillStyle = '#ecf0f1'
       ctx.fillRect(x + 32, y + 4, 4, 4)
+      ctx.fillStyle = '#fff'
+      ctx.fillRect(x + 33, y + 5, 2, 2)
 
       // Arm
-      ctx.fillStyle = '#2c3e50'
+      ctx.fillStyle = '#34495e'
       ctx.fillRect(x + 28, y + 14, 8, 6)
 
       // Mouth
+      ctx.fillStyle = '#2c3e50'
       ctx.fillRect(x + 20, y + 14, 8, 2)
+
+      // Spikes on back
+      ctx.fillStyle = '#2c3e50'
+      ctx.beginPath()
+      ctx.moveTo(x + 12, y + 20)
+      ctx.lineTo(x + 10, y + 12)
+      ctx.lineTo(x + 14, y + 18)
+      ctx.fill()
+
+      ctx.beginPath()
+      ctx.moveTo(x + 18, y + 22)
+      ctx.lineTo(x + 16, y + 14)
+      ctx.lineTo(x + 20, y + 20)
+      ctx.fill()
+
+      ctx.restore()
     }
 
-    const drawCactus = (x, y, width, height) => {
-      ctx.fillStyle = '#27ae60'
+    const drawCactus = (x, y, width, height, type) => {
+      // Cactus gradient
+      const cactusGradient = ctx.createLinearGradient(x, y, x + width, y + height)
+      cactusGradient.addColorStop(0, '#27ae60')
+      cactusGradient.addColorStop(0.5, '#2ecc71')
+      cactusGradient.addColorStop(1, '#27ae60')
+      ctx.fillStyle = cactusGradient
 
       // Main stem
       ctx.fillRect(x + width/3, y, width/3, height)
 
-      // Left arm
-      ctx.fillRect(x, y + height/3, width/3, height/4)
-      ctx.fillRect(x, y + height/6, width/3, height/4)
+      // Arms based on type
+      if (type === 'small') {
+        ctx.fillRect(x, y + height/3, width/3, height/4)
+        ctx.fillRect(x, y + height/6, width/3, height/4)
+      } else if (type === 'big') {
+        ctx.fillRect(x, y + height/4, width/3, height/3)
+        ctx.fillRect(x, y + height/8, width/3, height/4)
+        ctx.fillRect(x + width*2/3, y + height/3, width/3, height/4)
+      } else {
+        // Group
+        ctx.fillRect(x, y + height/4, width/3, height/3)
+        ctx.fillRect(x + width/3, y + height/5, width/3, height/4)
+        ctx.fillRect(x + width*2/3, y + height/3, width/3, height/3)
+      }
 
-      // Right arm
-      ctx.fillRect(x + width*2/3, y + height/4, width/3, height/5)
-      ctx.fillRect(x + width*2/3, y + height/8, width/3, height/5)
-
-      // Add some shadow detail
+      // Shadow detail
       ctx.fillStyle = '#1e8449'
       ctx.fillRect(x + width/2 - 2, y + height/2, 4, height/3)
+
+      // Highlight
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.1)'
+      ctx.fillRect(x + width/3 + 2, y, 4, height)
     }
 
-    const drawCloud = (x, y, scale) => {
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)'
+    const drawCloud = (x, y, scale, opacity) => {
+      ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`
       ctx.beginPath()
       ctx.arc(x, y, 15 * scale, 0, Math.PI * 2)
       ctx.arc(x + 18 * scale, y - 5 * scale, 18 * scale, 0, Math.PI * 2)
       ctx.arc(x + 35 * scale, y, 14 * scale, 0, Math.PI * 2)
+      ctx.arc(x + 10 * scale, y + 5 * scale, 10 * scale, 0, Math.PI * 2)
       ctx.fill()
     }
 
     const drawGround = () => {
-      // Ground line
-      ctx.fillStyle = '#8B4513'
-      ctx.fillRect(0, GROUND_Y + 42, GAME_WIDTH, 8)
+      // Ground gradient
+      const groundGradient = ctx.createLinearGradient(0, GROUND_Y + 38, 0, GROUND_Y + 50)
+      groundGradient.addColorStop(0, '#27ae60')
+      groundGradient.addColorStop(0.3, '#2ecc71')
+      groundGradient.addColorStop(1, '#27ae60')
+      ctx.fillStyle = groundGradient
+      ctx.fillRect(0, GROUND_Y + 38, GAME_WIDTH, 12)
 
-      // Ground top
-      ctx.fillStyle = '#654321'
-      ctx.fillRect(0, GROUND_Y + 40, GAME_WIDTH, 5)
-
-      // Grass
-      ctx.fillStyle = '#27ae60'
-      ctx.fillRect(0, GROUND_Y + 38, GAME_WIDTH, 2)
+      // Ground texture
+      ctx.fillStyle = '#229954'
+      for (let i = 0; i < GAME_WIDTH; i += 20) {
+        ctx.fillRect(i, GROUND_Y + 40, 2, 8)
+      }
     }
 
     const updateAndDraw = () => {
-      // Clear canvas
-      ctx.fillStyle = '#87CEEB'
+      if (!isPlaying) return
+
+      // Check if game is still playing
+      if (gameState !== 'playing') {
+        isPlaying = false
+        return
+      }
+
+      // Screen shake effect
+      let shakeX = 0, shakeY = 0
+      if (screenShake > 0) {
+        shakeX = (Math.random() - 0.5) * screenShake
+        shakeY = (Math.random() - 0.5) * screenShake
+        setScreenShake(prev => prev * 0.9)
+      }
+
+      ctx.save()
+      ctx.translate(shakeX, shakeY)
+
+      // Clear canvas with gradient sky
+      const skyGradient = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT)
+      skyGradient.addColorStop(0, '#87CEEB')
+      skyGradient.addColorStop(0.6, '#B0E0E6')
+      skyGradient.addColorStop(1, '#E0F6FF')
+      ctx.fillStyle = skyGradient
       ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT)
 
-      // Draw sun
-      const gradient = ctx.createRadialGradient(650, 80, 10, 650, 80, 40)
-      gradient.addColorStop(0, '#f1c40f')
-      gradient.addColorStop(1, '#e67e22')
-      ctx.fillStyle = gradient
+      // Draw sun with glow
+      const sunGradient = ctx.createRadialGradient(650, 80, 10, 650, 80, 50)
+      sunGradient.addColorStop(0, '#fff9c4')
+      sunGradient.addColorStop(0.3, '#f1c40f')
+      sunGradient.addColorStop(1, 'rgba(241, 196, 15, 0)')
+      ctx.fillStyle = sunGradient
       ctx.beginPath()
-      ctx.arc(650, 80, 40, 0, Math.PI * 2)
+      ctx.arc(650, 80, 50, 0, Math.PI * 2)
       ctx.fill()
 
+      ctx.fillStyle = '#f39c12'
+      ctx.beginPath()
+      ctx.arc(650, 80, 35, 0, Math.PI * 2)
+      ctx.fill()
+
+      // Parallax layers
+      const parallaxSpeed = gameSpeedRef.current * 0.3
+      if (parallaxLayersRef.current.length === 0) {
+        for (let i = 0; i < 5; i++) {
+          parallaxLayersRef.current.push({
+            x: Math.random() * GAME_WIDTH,
+            y: 100 + Math.random() * 200,
+            size: 30 + Math.random() * 50,
+            speed: 0.2 + Math.random() * 0.3,
+            opacity: 0.1 + Math.random() * 0.2
+          })
+        }
+      }
+
+      parallaxLayersRef.current.forEach((layer, i) => {
+        layer.x -= layer.speed * (parallaxSpeed / 3)
+        if (layer.x < -layer.size) layer.x = GAME_WIDTH + layer.size
+
+        ctx.fillStyle = `rgba(255, 255, 255, ${layer.opacity})`
+        ctx.beginPath()
+        ctx.arc(layer.x, layer.y, layer.size, 0, Math.PI * 2)
+        ctx.fill()
+      })
+
       // Draw clouds
-      if (Math.random() < 0.01) spawnCloud()
+      if (Math.random() < 0.005) spawnCloud()
 
       cloudsRef.current.forEach((cloud, i) => {
         cloud.x -= cloud.speed
-        drawCloud(cloud.x, cloud.y, cloud.scale)
+        drawCloud(cloud.x, cloud.y, cloud.scale, cloud.opacity)
         if (cloud.x < -100) cloudsRef.current.splice(i, 1)
       })
 
       drawGround()
+
+      // Spawn particles when running
+      if (!dinoRef.current.isJumping && gameState === 'playing' && frameCountRef.current % 3 === 0) {
+        spawnParticle(DINO_X + 10, GROUND_Y + 42, 'dust')
+      }
+
+      // Update and draw particles
+      particlesRef.current.forEach((particle, i) => {
+        particle.x += particle.vx
+        particle.y += particle.vy
+        particle.life -= particle.decay
+
+        ctx.fillStyle = particle.color
+        ctx.globalAlpha = particle.life
+        const radius = Math.max(0.5, particle.size * particle.life)
+        ctx.beginPath()
+        ctx.arc(particle.x, particle.y, radius, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.globalAlpha = 1
+
+        if (particle.life <= 0) {
+          particlesRef.current.splice(i, 1)
+        }
+      })
 
       // Update and draw dino
       if (dinoRef.current.isJumping) {
         dinoRef.current.vy += GRAVITY
         dinoRef.current.y += dinoRef.current.vy
 
+        // Squash and stretch during jump
+        dinoRef.current.scaleX = 1 + (dinoRef.current.vy * 0.01)
+        dinoRef.current.scaleY = 1 - (dinoRef.current.vy * 0.01)
+
         if (dinoRef.current.y >= GROUND_Y) {
           dinoRef.current.y = GROUND_Y
           dinoRef.current.vy = 0
           dinoRef.current.isJumping = false
+          dinoRef.current.scaleX = 1
+          dinoRef.current.scaleY = 1
         }
+      } else {
+        // Squash and stretch when running
+        const runCycle = Math.sin(frameCountRef.current * 0.3) * 0.05
+        dinoRef.current.scaleX = 1 + runCycle
+        dinoRef.current.scaleY = 1 - runCycle
       }
 
       drawDino(DINO_X, dinoRef.current.y, frameCountRef.current)
@@ -253,7 +421,8 @@ function DinoGame() {
 
       obstaclesRef.current.forEach((obs, i) => {
         obs.x -= gameSpeedRef.current
-        drawCactus(obs.x, obs.y, obs.width, obs.height)
+        const type = obs.type || 'small'
+        drawCactus(obs.x, obs.y, obs.width, obs.height, type)
 
         // Collision detection
         if (
@@ -263,6 +432,7 @@ function DinoGame() {
           dinoRef.current.y + dinoRef.current.height > obs.y
         ) {
           // Collision!
+          setScreenShake(15)
           setGameState('gameover')
           if (!obs.passed) {
             obs.passed = true
@@ -300,15 +470,18 @@ function DinoGame() {
       }
       frameCountRef.current++
 
+      ctx.restore()
+
       animationFrameId = requestAnimationFrame(updateAndDraw)
     }
 
     updateAndDraw()
 
     return () => {
+      isPlaying = false
       if (animationFrameId) cancelAnimationFrame(animationFrameId)
     }
-  }, [gameState, spawnObstacle, spawnCloud])
+  }, [gameState])
 
   return (
     <div className="game-container">
